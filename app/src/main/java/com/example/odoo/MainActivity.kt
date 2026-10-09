@@ -9,15 +9,22 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ExitToApp
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,7 +37,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModelProvider
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import com.example.odoo.ui.theme.OdooTheme
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Locale
 
@@ -57,9 +69,8 @@ class MainActivity : ComponentActivity() {
             var isDarkTheme by remember { mutableStateOf(false) }
 
             OdooTheme(darkTheme = isDarkTheme) {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    PortalScreen(
-                        modifier = Modifier.padding(innerPadding),
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    RootScreen(
                         baseUrl = "https://app.iqra.edu.pk", 
                         viewModel = viewModel,
                         isDarkTheme = isDarkTheme,
@@ -79,171 +90,335 @@ val BadgeBg = Color(0xFFE8F0FE)
 val BadgeText = Color(0xFF1565C0)
 val TextGray = Color(0xFF5F6368)
 
-@OptIn(ExperimentalFoundationApi::class)
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun PortalScreen(
-    modifier: Modifier = Modifier,
+fun RootScreen(
     baseUrl: String,
     viewModel: PortalViewModel,
     isDarkTheme: Boolean,
     onThemeToggle: () -> Unit
 ) {
     val sessionId by viewModel.sessionId.collectAsState()
+
+    if (sessionId == null) {
+        LoginScreen(baseUrl, viewModel)
+    } else {
+        MainAppScreen(baseUrl, viewModel, isDarkTheme, onThemeToggle)
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun LoginScreen(baseUrl: String, viewModel: PortalViewModel) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Text(
+            text = "IQRA UNIVERSITY PORTAL",
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(top = 48.dp, start = 16.dp, bottom = 16.dp),
+            fontFamily = FontFamily.Serif,
+            fontWeight = FontWeight.Bold
+        )
+        
+        AndroidView(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            factory = { context ->
+                WebView(context).apply {
+                    settings.javaScriptEnabled = true
+                    val cookieManager = CookieManager.getInstance()
+                    cookieManager.setAcceptCookie(true)
+                    cookieManager.setAcceptThirdPartyCookies(this, true)
+
+                    webViewClient = AuthWebViewClient(
+                        loginUrl = "$baseUrl/web/login", 
+                        onSessionExtracted = { extractedId ->
+                            viewModel.setSessionId(extractedId)
+                        }
+                    )
+                    loadUrl("$baseUrl/web/login")
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainAppScreen(
+    baseUrl: String,
+    viewModel: PortalViewModel,
+    isDarkTheme: Boolean,
+    onThemeToggle: () -> Unit
+) {
+    val navController = rememberNavController()
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = if (isDarkTheme) MaterialTheme.colorScheme.surface else Color.White
+            ) {
+                Spacer(Modifier.height(48.dp))
+                Text(
+                    text = "IQRA PORTAL",
+                    modifier = Modifier.padding(16.dp),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Serif,
+                    color = if (isDarkTheme) Color.White else IqraNavy
+                )
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Outlined.Home, contentDescription = "Home") },
+                    label = { Text("Home") },
+                    selected = navController.currentDestination?.route == "home",
+                    onClick = {
+                        navController.navigate("home") { popUpTo("home") { inclusive = true } }
+                        scope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Outlined.DateRange, contentDescription = "Class Schedule") },
+                    label = { Text("Class Schedule") },
+                    selected = navController.currentDestination?.route == "schedule",
+                    onClick = {
+                        navController.navigate("schedule") { popUpTo("home") }
+                        scope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { 
+                        Column {
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(
+                                    text = "IQRA ",
+                                    color = Color.White,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Serif
+                                )
+                                Text(
+                                    text = "UNIVERSITY",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(bottom = 2.dp),
+                                    fontFamily = FontFamily.Serif
+                                )
+                            }
+                            
+                            val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+                            val subtitle = when (currentRoute) {
+                                "schedule" -> "Class Schedule"
+                                else -> "Dashboard"
+                            }
+                            
+                            Text(
+                                text = subtitle,
+                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 14.sp
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Outlined.Menu, contentDescription = "Menu", tint = Color.White)
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = onThemeToggle) {
+                            Text(if (isDarkTheme) "☀️" else "🌙", fontSize = 20.sp)
+                        }
+                        IconButton(onClick = { viewModel.setSessionId(null) }) {
+                            Icon(Icons.AutoMirrored.Outlined.ExitToApp, contentDescription = "Logout", tint = Color.White)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = IqraNavy)
+                )
+            }
+        ) { innerPadding ->
+            NavHost(
+                navController = navController,
+                startDestination = "home",
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .background(if (isDarkTheme) MaterialTheme.colorScheme.background else BackgroundGray)
+            ) {
+                composable("home") {
+                    HomeScreen(isDarkTheme)
+                }
+                composable("schedule") {
+                    ScheduleScreen(baseUrl, viewModel, isDarkTheme)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HomeScreen(isDarkTheme: Boolean) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Outlined.Home,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = if (isDarkTheme) Color.White.copy(alpha = 0.5f) else TextGray.copy(alpha = 0.5f)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Welcome to Iqra Dashboard",
+                style = MaterialTheme.typography.titleLarge,
+                color = if (isDarkTheme) Color.White else IqraNavy
+            )
+        }
+    }
+}
+
+
+
+
+
+
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ScheduleScreen(baseUrl: String, viewModel: PortalViewModel, isDarkTheme: Boolean) {
     val uiState by viewModel.uiState.collectAsState()
 
-    Column(modifier = modifier
-        .fillMaxSize()
-        .background(if (isDarkTheme) MaterialTheme.colorScheme.background else BackgroundGray)
-    ) {
-        if (sessionId == null) {
-            // LOGIN WEBVIEW
-            Text(
-                text = "IQRA UNIVERSITY PORTAL",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(16.dp),
-                fontFamily = FontFamily.Serif,
-                fontWeight = FontWeight.Bold
-            )
-            
-            AndroidView(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                factory = { context ->
-                    WebView(context).apply {
-                        settings.javaScriptEnabled = true
-                        val cookieManager = CookieManager.getInstance()
-                        cookieManager.setAcceptCookie(true)
-                        cookieManager.setAcceptThirdPartyCookies(this, true)
+    // TRIGGER FETCH ONCE
+    LaunchedEffect(Unit) {
+        if (uiState is PortalUiState.Idle) {
+            viewModel.fetchTimetable(baseUrl)
+        }
+    }
 
-                        webViewClient = AuthWebViewClient(
-                            loginUrl = "$baseUrl/web/login", 
-                            onSessionExtracted = { extractedId ->
-                                viewModel.setSessionId(extractedId)
-                            }
-                        )
-                        loadUrl("$baseUrl/web/login")
-                    }
-                }
-            )
-        } else {
-            // TOP BAR
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(IqraNavy)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+    when (val state = uiState) {
+        is PortalUiState.Idle, is PortalUiState.Loading -> {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = IqraBlue)
+            }
+        }
+        is PortalUiState.Error -> {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Column {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            text = "IQRA ",
-                            color = Color.White,
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Serif
-                        )
-                        Text(
-                            text = "UNIVERSITY",
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            modifier = Modifier.padding(bottom = 3.dp),
-                            fontFamily = FontFamily.Serif
-                        )
-                    }
-                    Text(
-                        text = "Class Schedule",
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontSize = 16.sp
-                    )
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onThemeToggle) {
-                        Text(if (isDarkTheme) "☀️" else "🌙", fontSize = 20.sp)
-                    }
-                    
-                    OutlinedButton(
-                        onClick = { viewModel.setSessionId(null) },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.ExitToApp,
-                            contentDescription = "Logout",
-                            modifier = Modifier.size(18.dp).padding(end = 6.dp)
-                        )
-                        Text("Logout")
-                    }
+                Text("Error: ${state.message}", color = MaterialTheme.colorScheme.error)
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(onClick = { viewModel.fetchTimetable(baseUrl) }, colors = ButtonDefaults.buttonColors(containerColor = IqraBlue)) {
+                    Text("Retry")
                 }
             }
-
-            // TRIGGER FETCH
-            LaunchedEffect(sessionId) {
-                if (sessionId != null && uiState is PortalUiState.Idle) {
-                    viewModel.fetchTimetable(baseUrl)
+        }
+        is PortalUiState.Success -> {
+            val scheduleMap = state.schedule
+            
+            if (scheduleMap.isEmpty() || scheduleMap.values.all { it.isEmpty() }) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No timetable entries found.", color = TextGray)
                 }
-            }
-
-            // UI STATE HANDLING
-            when (val state = uiState) {
-                is PortalUiState.Idle, is PortalUiState.Loading -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = IqraBlue)
-                    }
-                }
-                is PortalUiState.Error -> {
-                    Column(
-                        modifier = Modifier.fillMaxSize().padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text("Error: ${state.message}", color = MaterialTheme.colorScheme.error)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(onClick = { viewModel.fetchTimetable(baseUrl) }, colors = ButtonDefaults.buttonColors(containerColor = IqraBlue)) {
-                            Text("Retry")
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    scheduleMap.forEach { (day, entries) ->
+                        stickyHeader {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(if (isDarkTheme) MaterialTheme.colorScheme.background.copy(alpha = 0.95f) else BackgroundGray.copy(alpha = 0.95f))
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.DateRange,
+                                    contentDescription = "Day",
+                                    tint = if (isDarkTheme) Color.White else IqraNavy,
+                                    modifier = Modifier.size(22.dp).padding(end = 8.dp)
+                                )
+                                Text(
+                                    text = day.trim(),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = if (isDarkTheme) Color.White else IqraNavy,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
-                    }
-                }
-                is PortalUiState.Success -> {
-                    val scheduleMap = state.schedule
-                    
-                    if (scheduleMap.isEmpty() || scheduleMap.values.all { it.isEmpty() }) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No timetable entries found on this page.", color = TextGray)
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(bottom = 24.dp)
-                        ) {
-                            scheduleMap.forEach { (day, entries) ->
-                                stickyHeader {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .background(if (isDarkTheme) MaterialTheme.colorScheme.background.copy(alpha = 0.95f) else BackgroundGray.copy(alpha = 0.95f))
-                                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.DateRange,
-                                            contentDescription = "Day",
-                                            tint = if (isDarkTheme) Color.White else IqraNavy,
-                                            modifier = Modifier.size(22.dp).padding(end = 8.dp)
-                                        )
-                                        Text(
-                                            text = day.trim(),
-                                            style = MaterialTheme.typography.titleLarge,
-                                            color = if (isDarkTheme) Color.White else IqraNavy,
-                                            fontWeight = FontWeight.Bold
+                        item {
+                            val listState = rememberLazyListState()
+                            Box(contentAlignment = Alignment.Center) {
+                                LazyRow(
+                                    state = listState,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    items(entries) { entry ->
+                                        ModernTimetableCard(
+                                            item = entry,
+                                            isDarkTheme = isDarkTheme,
+                                            modifier = Modifier.fillParentMaxWidth(0.9f) // Fixed size so all cards match!
                                         )
                                     }
                                 }
-                                items(entries) { item ->
-                                    ModernTimetableCard(item, isDarkTheme)
+                                
+                                // Left Scroll Indicator Arrow
+                                if (listState.canScrollBackward) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (isDarkTheme) MaterialTheme.colorScheme.surfaceVariant else Color.White,
+                                        shadowElevation = 4.dp,
+                                        modifier = Modifier
+                                            .align(Alignment.CenterStart)
+                                            .padding(start = 4.dp)
+                                            .size(32.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
+                                                contentDescription = "Scroll Left",
+                                                tint = if (isDarkTheme) Color.White else Color.Black,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                
+                                // Right Scroll Indicator Arrow
+                                if (listState.canScrollForward) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (isDarkTheme) MaterialTheme.colorScheme.surfaceVariant else Color.White,
+                                        shadowElevation = 4.dp,
+                                        modifier = Modifier
+                                            .align(Alignment.CenterEnd)
+                                            .padding(end = 4.dp)
+                                            .size(32.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                                                contentDescription = "Scroll Right",
+                                                tint = if (isDarkTheme) Color.White else Color.Black,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -255,11 +430,9 @@ fun PortalScreen(
 }
 
 @Composable
-fun ModernTimetableCard(item: ScheduleItem, isDarkTheme: Boolean) {
+fun ModernTimetableCard(item: ScheduleItem, isDarkTheme: Boolean, modifier: Modifier = Modifier) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier = modifier,
         shape = RoundedCornerShape(8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         colors = CardDefaults.cardColors(containerColor = if (isDarkTheme) MaterialTheme.colorScheme.surface else Color.White)

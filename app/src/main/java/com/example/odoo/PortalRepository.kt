@@ -76,24 +76,27 @@ class PortalRepository(private val client: OkHttpClient) {
                 val instructor = lines.getOrNull(0) ?: "Unknown Instructor"
                 val course = lines.getOrNull(1) ?: "Unknown Course"
                 
-                // Smart Room Extraction:
-                // Scan the lines from the bottom up. We are looking for the line that actually contains the room name.
-                // According to Iqra University's format, rooms almost always contain "GC" or "LAB".
-                var room = "Unknown Room"
-                for (line in lines.reversed()) {
-                    val upperLine = line.uppercase()
-                    // Only match lines that have room indicators, but exclude the course code line (which usually has hyphens)
-                    if ((upperLine.contains("GC") || upperLine.contains("LAB")) && !upperLine.contains("-FA-")) {
-                        room = line.substringBefore("(").trim()
-                        if (room.isNotEmpty()) break
-                    }
+                // We drop the Instructor and Course lines, then filter out the ugly course codes
+                val potentialRoomLines = lines.drop(2).filter { 
+                    !it.contains("-FA-", ignoreCase = true) && 
+                    !it.contains("-SP-", ignoreCase = true) && 
+                    !it.contains("IU02", ignoreCase = true) &&
+                    !it.contains("BS-CS", ignoreCase = true)
                 }
                 
-                // Fallback if the above didn't find anything
-                if (room.isEmpty() || room == "Unknown Room") {
-                    val lastLine = lines.lastOrNull() ?: ""
-                    room = lastLine.substringBefore("(").trim().ifEmpty { lastLine }
+                var room = "Unknown Room"
+                if (potentialRoomLines.isNotEmpty()) {
+                    // Combine the remaining lines in case Jsoup split "GCLAB1" and "( Lab )" onto different lines
+                    val combinedRemaining = potentialRoomLines.joinToString(" ")
+                    room = combinedRemaining
+                } else if (lines.size >= 3) {
+                    // Ultimate Fallback: Just grab the absolute last line
+                    room = lines.last()
                 }
+                
+                // Clean up the string to remove "( Lecture )", "( Lab )", ")", or "*" 
+                room = room.substringBefore("(").replace(Regex("[)*]"), "").trim()
+                if (room.isEmpty()) room = "Unknown Room"
                 
                 // EXTRACT DAY FROM CODYHOUSE STRUCTURE
                 var currentDay = "Schedule" // Default if we can't find it

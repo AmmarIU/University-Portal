@@ -16,11 +16,22 @@ data class ScheduleItem(
     val instructor: String
 )
 
-data class AttendanceItem(
+data class CourseAttendance(
     val courseName: String,
-    val percentage: String,
-    val totalClasses: String,
-    val details: String
+    val courseCode: String,
+    val instructorName: String = "Unknown Instructor",
+    val classesConducted: Int,
+    val classesAttended: Int,
+    val academicTerm: String,
+    val attendancePercentage: Double,
+    val attendanceLogs: List<AttendanceLog>
+)
+
+data class AttendanceLog(
+    val serialNo: Int,
+    val date: String,
+    val status: String,
+    val fine: String
 )
 
 class PortalRepository(private val client: OkHttpClient) {
@@ -48,34 +59,54 @@ class PortalRepository(private val client: OkHttpClient) {
         }
     }
 
-    suspend fun fetchAttendance(baseUrl: String): Result<List<AttendanceItem>> = withContext(Dispatchers.IO) {
+    suspend fun fetchAttendance(baseUrl: String): Result<List<CourseAttendance>> = withContext(Dispatchers.IO) {
         try {
-            // STEP 1: Fetch the Dashboard to hunt for the Course IDs
+            // STEP 1: Fetch the Dashboard to find the dedicated Attendance link
             val request = Request.Builder()
-                .url("$baseUrl/student/dashboard") // Using the standard dashboard route
+                .url("$baseUrl/student/dashboard")
                 .get()
                 .build()
 
-            client.newCall(request).execute().use { response ->
+            val attendancePageUrl = client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    return@withContext Result.failure(Exception("HTTP Error: ${response.code}"))
+                    return@withContext Result.failure(Exception("HTTP Error: ${response.code} fetching dashboard"))
                 }
 
                 val html = response.body?.string() ?: ""
                 val document = Jsoup.parse(html)
                 
-                // Look for any links on the dashboard that lead to a course or attendance page
-                val courseLinks = document.select("a[href*=/student/course]").map { it.attr("href") }.toSet()
+                // Find the specific link that goes to the centralized Attendance page
+                val link = document.select("a[href*=/attendance]").firstOrNull()?.attr("href")
                 
-                val results = mutableListOf<AttendanceItem>()
+                // Extract Instructor mapping from the dashboard schedule or course list
+                val instructorMap = extractInstructorsFromDashboard(document)
                 
-                if (courseLinks.isEmpty()) {
-                    results.add(AttendanceItem("Discovery Failed", "0%", "0", "Could not find any course links on the dashboard. Are they hidden in a dropdown?"))
-                } else {
-                    results.add(AttendanceItem("Discovery Success!", "100%", "${courseLinks.size}", "Found course links:\n${courseLinks.joinToString("\n")}"))
+                if (link.isNullOrEmpty()) {
+                    return@withContext Result.failure(Exception("Could not find the main 'Attendance' link on the dashboard."))
                 }
                 
-                Result.success(results)
+                Pair(if (link.startsWith("http")) link else "$baseUrl$link", instructorMap)
+            }
+            
+            // STEP 2: Fetch that single Attendance page and parse ALL courses from it
+            val attendanceRequest = Request.Builder()
+                .url(attendancePageUrl.first)
+                .get()
+                .build()
+                
+            client.newCall(attendanceRequest).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(Exception("HTTP Error: ${response.code} fetching attendance page"))
+                }
+
+                val html = response.body?.string() ?: ""
+                val courses = parseAllCoursesAttendanceHtml(html, attendancePageUrl.second)
+                
+                if (courses.isNotEmpty()) {
+                    Result.success(courses)
+                } else {
+                    Result.failure(Exception("Successfully loaded attendance page, but could not parse any courses."))
+                }
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -147,9 +178,117 @@ class PortalRepository(private val client: OkHttpClient) {
         
         return results
     }
+    
+    fun extractInstructorsFromDashboard(document: Document): Map<String, String> {
+        val instructorMap = mutableMapOf<String, String>()
+        
+        // Find all the cards on the dashboard that contain course information
+        val courseCards = document.select(".card-body")
+        
+        for (card in courseCards) {
+            // The course name is in the card header, which is a sibling to card-body
+            val header = card.previousElementSibling()
+            val courseName = header?.select("span")?.text() ?: continue
+            
+            // The instructor name is in the h6 tag with class "card-title"
+            val instructorName = card.select(".card-title").text()
+            
+            if (courseName.isNotEmpty() && instructorName.isNotEmpty()) {
+                instructorMap[courseName.lowercase().trim()] = instructorName
+            }
+        }
+        
+        return instructorMap
+    }
 
-    private fun parseAttendanceHtml(document: Document): List<AttendanceItem> {
+    private fun parseAttendanceHtml(document: Document): List<CourseAttendance> {
         // We won't need this until Step 2!
         return emptyList()
     }
+}
+
+fun parseAllCoursesAttendanceHtml(html: String, instructorMap: Map<String, String>): List<CourseAttendance> {
+    val document = Jsoup.parse(html)
+    val results = mutableListOf<CourseAttendance>()
+    
+    // Find every label that says "Course :"
+    val courseLabels = document.select("b:contains(Course :)")
+    
+    for (label in courseLabels) {
+        // The container holding all the info for a single course is usually the closest <li> or `.uk-grid`'s parent
+        val gridContainer = label.closest(".uk-grid")
+        val mainContainer = gridContainer?.parent() ?: label.closest("li") ?: continue
+        
+        // 1. Extract Course Info
+        val courseName = mainContainer.selectFirst("b:contains(Course :) + span")?.text().orEmpty()
+        if (courseName.isEmpty()) continue
+        
+        val courseCode = mainContainer.selectFirst("b:contains(Course Code :) + span")?.text().orEmpty()
+        
+        // Prevent duplicates if DOM traversal accidentally loops
+        if (results.any { it.courseCode == courseCode && it.courseCode.isNotEmpty() }) continue
+        
+        // 2. Extract Conducted / Attended stats
+        val classesConducted = mainContainer.selectFirst("b:contains(Number of classes Conducted :) + span")?.text()?.toIntOrNull() ?: 0
+        val classesAttended = mainContainer.selectFirst("b:contains(Number of classes Attended :) + span")?.text()?.toIntOrNull() ?: 0
+        
+        // 3. Extract Percentage Info
+        val academicTerm = mainContainer.selectFirst("b:contains(Academic Term :) + span")?.text().orEmpty()
+        val attendancePercentage = mainContainer.selectFirst("b:contains(Attendance Percentage:) + span")?.text()?.toDoubleOrNull() ?: 0.0
+        
+        // 4. Extract Attendance Logs Table inside this specific container
+        val logRows = mainContainer.select("table.uk-table tbody tr")
+        val attendanceLogs = mutableListOf<AttendanceLog>()
+        
+        for (row in logRows) {
+            val columns = row.select("td")
+            if (columns.size >= 4) {
+                val srNo = columns[0].text().toIntOrNull() ?: 0
+                val date = columns[1].text()
+                val status = columns[2].text()
+                val fine = columns[3].text()
+                attendanceLogs.add(AttendanceLog(srNo, date, status, fine))
+            }
+        }
+        
+        // 5. Construct and add to list
+        
+        // Find matching instructor using course name or code
+        var instructor = "Unknown Instructor"
+        
+        // Clean up the course name we parsed from the attendance page to make it match the timetable
+        val cleanAttendanceCourseName = courseName.lowercase().trim()
+        
+        // 1. Try an exact match first (This prevents "Course" from eagerly matching "Course (Lab)")
+        if (instructorMap.containsKey(cleanAttendanceCourseName)) {
+            instructor = instructorMap[cleanAttendanceCourseName]!!
+        } else {
+            // 2. If no exact match, find the longest partial match to be safe
+            val bestMatch = instructorMap.keys
+                .filter { cleanAttendanceCourseName.contains(it) || it.contains(cleanAttendanceCourseName) }
+                .maxByOrNull { it.length } // Picks "Artificial Intelligence (Lab)" over "Artificial Intelligence"
+                
+            if (bestMatch != null) {
+                instructor = instructorMap[bestMatch]!!
+            }
+        }
+        
+        // If we still didn't find an instructor, append the map data for debugging purposes
+        if (instructor == "Unknown Instructor" && instructorMap.isNotEmpty()) {
+           // instructor = "Map keys: ${instructorMap.keys.take(2).joinToString()}"
+        }
+        
+        results.add(CourseAttendance(
+            courseName = courseName,
+            courseCode = courseCode,
+            instructorName = instructor,
+            classesConducted = classesConducted,
+            classesAttended = classesAttended,
+            academicTerm = academicTerm,
+            attendancePercentage = attendancePercentage,
+            attendanceLogs = attendanceLogs
+        ))
+    }
+    
+    return results
 }

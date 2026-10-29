@@ -76,16 +76,27 @@ class PortalRepository(private val client: OkHttpClient) {
                 val document = Jsoup.parse(html)
                 
                 // Find the specific link that goes to the centralized Attendance page
-                val link = document.select("a[href*=/attendance]").firstOrNull()?.attr("href")
+                // The dashboard might hide or change the link text, so we check multiple variations just in case
+                val link = document.select("a[href*=/attendance], a[href*=/student/course]").firstOrNull()?.attr("href")
                 
                 // Extract Instructor mapping from the dashboard schedule or course list
                 val instructorMap = extractInstructorsFromDashboard(document)
                 
                 if (link.isNullOrEmpty()) {
+                    // Log the HTML to see what's actually there if it fails
+                    // val debugHtml = document.body().html().take(500)
                     return@withContext Result.failure(Exception("Could not find the main 'Attendance' link on the dashboard."))
                 }
                 
-                Pair(if (link.startsWith("http")) link else "$baseUrl$link", instructorMap)
+                // If it picked up a generic course link because /attendance is missing, we can manually construct the attendance URL
+                val finalUrl = if (link.contains("/attendance")) {
+                    if (link.startsWith("http")) link else "$baseUrl$link"
+                } else {
+                    // Fallback: forcefully navigate to the known attendance route
+                    "$baseUrl/student/attendance"
+                }
+                
+                Pair(finalUrl, instructorMap)
             }
             
             // STEP 2: Fetch that single Attendance page and parse ALL courses from it
@@ -126,12 +137,14 @@ class PortalRepository(private val client: OkHttpClient) {
             val timeMatch = timeRegex.find(text)
             val startTime = block.attr("data-start")
             val endTime = block.attr("data-end")
-            val timeSlot = if (timeMatch != null) timeMatch.value else if (startTime.isNotEmpty() && endTime.isNotEmpty()) "$startTime - $endTime" else ""
+            val timeSlot = timeMatch?.value ?: if (startTime.isNotEmpty() && endTime.isNotEmpty()) "$startTime - $endTime" else ""
             
             if (timeSlot.isNotEmpty()) {
                 val lines = block.wholeText().lines()
+                    .asSequence()
                     .map { it.trim() }
                     .filter { it.isNotBlank() && !it.matches(Regex("\\d{2}:\\d{2}\\s*-\\s*\\d{2}:\\d{2}")) }
+                    .toList()
                     
                 val instructor = lines.getOrNull(0) ?: "Unknown Instructor"
                 val course = lines.getOrNull(1) ?: "Unknown Course"
@@ -179,7 +192,7 @@ class PortalRepository(private val client: OkHttpClient) {
         return results
     }
     
-    fun extractInstructorsFromDashboard(document: Document): Map<String, String> {
+    private fun extractInstructorsFromDashboard(document: Document): Map<String, String> {
         val instructorMap = mutableMapOf<String, String>()
         
         // Find all the cards on the dashboard that contain course information
@@ -199,11 +212,6 @@ class PortalRepository(private val client: OkHttpClient) {
         }
         
         return instructorMap
-    }
-
-    private fun parseAttendanceHtml(document: Document): List<CourseAttendance> {
-        // We won't need this until Step 2!
-        return emptyList()
     }
 }
 
@@ -226,7 +234,7 @@ fun parseAllCoursesAttendanceHtml(html: String, instructorMap: Map<String, Strin
         val courseCode = mainContainer.selectFirst("b:contains(Course Code :) + span")?.text().orEmpty()
         
         // Prevent duplicates if DOM traversal accidentally loops
-        if (results.any { it.courseCode == courseCode && it.courseCode.isNotEmpty() }) continue
+        if (results.any { (it.courseCode == courseCode) && it.courseCode.isNotEmpty() }) continue
         
         // 2. Extract Conducted / Attended stats
         val classesConducted = mainContainer.selectFirst("b:contains(Number of classes Conducted :) + span")?.text()?.toIntOrNull() ?: 0
@@ -268,26 +276,23 @@ fun parseAllCoursesAttendanceHtml(html: String, instructorMap: Map<String, Strin
                 .filter { cleanAttendanceCourseName.contains(it) || it.contains(cleanAttendanceCourseName) }
                 .maxByOrNull { it.length } // Picks "Artificial Intelligence (Lab)" over "Artificial Intelligence"
                 
-            if (bestMatch != null) {
-                instructor = instructorMap[bestMatch]!!
+            bestMatch?.let {
+                instructor = instructorMap[it]!!
             }
         }
         
-        // If we still didn't find an instructor, append the map data for debugging purposes
-        if (instructor == "Unknown Instructor" && instructorMap.isNotEmpty()) {
-           // instructor = "Map keys: ${instructorMap.keys.take(2).joinToString()}"
-        }
-        
-        results.add(CourseAttendance(
-            courseName = courseName,
-            courseCode = courseCode,
-            instructorName = instructor,
-            classesConducted = classesConducted,
-            classesAttended = classesAttended,
-            academicTerm = academicTerm,
-            attendancePercentage = attendancePercentage,
-            attendanceLogs = attendanceLogs
-        ))
+        results.add(
+            CourseAttendance(
+                courseName = courseName,
+                courseCode = courseCode,
+                instructorName = instructor,
+                classesConducted = classesConducted,
+                classesAttended = classesAttended,
+                academicTerm = academicTerm,
+                attendancePercentage = attendancePercentage,
+                attendanceLogs = attendanceLogs
+            )
+        )
     }
     
     return results

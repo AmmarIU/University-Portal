@@ -34,6 +34,33 @@ data class AttendanceLog(
     val fine: String
 )
 
+data class RoadmapData(
+    val studentName: String,
+    val programName: String,
+    val careerYear: String,
+    val completedCreditHours: Float,
+    val totalCreditHours: Float,
+    val careerLevel: String,
+    val semesters: List<RoadmapSemester>
+)
+
+data class RoadmapSemester(
+    val title: String,
+    val subtitle: String,
+    val status: String,
+    val courses: List<RoadmapCourse>
+)
+
+data class RoadmapCourse(
+    val code: String,
+    val name: String,
+    val type: String,
+    val category: String,
+    val creditHours: String,
+    val status: String,
+    val term: String
+)
+
 class PortalRepository(private val client: OkHttpClient) {
 
     suspend fun fetchTimetable(baseUrl: String): Result<List<ScheduleItem>> = withContext(Dispatchers.IO) {
@@ -192,7 +219,7 @@ class PortalRepository(private val client: OkHttpClient) {
         return results
     }
     
-    private fun extractInstructorsFromDashboard(document: Document): Map<String, String> {
+    fun extractInstructorsFromDashboard(document: Document): Map<String, String> {
         val instructorMap = mutableMapOf<String, String>()
         
         // Find all the cards on the dashboard that contain course information
@@ -212,6 +239,155 @@ class PortalRepository(private val client: OkHttpClient) {
         }
         
         return instructorMap
+    }
+    suspend fun fetchRoadmap(baseUrl: String): Result<RoadmapData> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$baseUrl/student/roadmap/")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("HTTP Error: ${response.code} fetching roadmap"))
+            }
+
+            val html = response.body?.string() ?: ""
+            val data = parseRoadmapHtml(html)
+            
+            if (data != null) {
+                Result.success(data)
+            } else {
+                Result.failure(Exception("Successfully loaded roadmap page, but could not parse the data."))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+}
+
+fun parseRoadmapHtml(html: String): RoadmapData? {
+    try {
+        val document = Jsoup.parse(html)
+        
+        // 1. Extract Header Information
+        val headerInfoRows = document.select(".container-fluid.text-left .row")
+        if (headerInfoRows.isEmpty()) return null
+        
+        var studentName = "Unknown"
+        var totalCreditHour = 0f
+        var calendarYear = "Unknown"
+        var careerLevel = "Unknown"
+        var programName = "Unknown"
+        
+        // Row 1
+        val row1 = headerInfoRows.getOrNull(0)?.select(".col-4")
+        if (row1 != null && row1.size >= 3) {
+            studentName = row1[0].text().replace("Name:", "").trim()
+            totalCreditHour = row1[1].text().replace("Credit Hour:", "").trim().toFloatOrNull() ?: 138f
+            calendarYear = row1[2].text().replace("Calendar Year:", "").trim()
+        }
+        
+        // Row 2
+        val row2 = headerInfoRows.getOrNull(1)?.select(".col-4")
+        if (row2 != null && row2.size >= 2) {
+            careerLevel = row2[0].text().replace("Career:", "").trim()
+            programName = row2[1].text().replace("Program:", "").trim()
+        }
+
+        val semesters = mutableListOf<RoadmapSemester>()
+        var calculatedCompletedCredits = 0f
+        
+        // 2. Extract Semesters
+        // The structure is <h4>SEMESTER-X</h4> followed by a <table class="uk-table">
+        val h4Tags = document.select("h4")
+        for (h4 in h4Tags) {
+            val titleText = h4.text().trim() // e.g., "SEMESTER-1" or "Elective Courses"
+            
+            // The table is usually the immediate next sibling after the h4
+            val table = h4.nextElementSibling()
+            if (table == null || table.tagName() != "table") continue
+            
+            val courses = mutableListOf<RoadmapCourse>()
+            val rows = table.select("tbody tr.table-child-row")
+            
+            for (row in rows) {
+                val cols = row.select("td")
+                if (cols.size >= 7) {
+                    val code = cols[0].text().trim()
+                    val name = cols[1].text().trim()
+                    val type = cols[2].text().trim()
+                    val category = cols[3].text().trim()
+                    val creditHoursStr = cols[4].text().trim()
+                    val term = cols[5].text().trim()
+                    val status = cols[6].text().trim()
+                    
+                    val creditValue = creditHoursStr.toFloatOrNull() ?: 0f
+                    
+                    // Logic to calculate dynamically completed credits
+                    val isCompleted = status.isNotBlank() && 
+                                      !status.equals("Enrolled", true) && 
+                                      !status.contains("To be Taken", true) &&
+                                      !status.equals("F", true)
+                                      
+                    if (isCompleted) {
+                        calculatedCompletedCredits += creditValue
+                    }
+                    
+                    courses.add(
+                        RoadmapCourse(
+                            code = code,
+                            name = name,
+                            type = type,
+                            category = category,
+                            creditHours = creditHoursStr,
+                            status = status,
+                            term = term
+                        )
+                    )
+                }
+            }
+            
+            // Determine a pseudo-subtitle and overall status based on the courses inside
+            var semesterStatus = "Completed"
+            var subtitle = ""
+            
+            if (titleText.equals("Elective Courses", ignoreCase = true)) {
+                semesterStatus = "Electives"
+                subtitle = "Optional Pool"
+            } else if (courses.any { it.status.equals("Enrolled", ignoreCase = true) }) {
+                semesterStatus = "Active"
+                subtitle = courses.firstOrNull { it.term.isNotEmpty() }?.term ?: "Current Semester"
+            } else if (courses.all { it.status.equals("To be Taken", ignoreCase = true) || it.status.isEmpty() }) {
+                semesterStatus = "Upcoming"
+                subtitle = "Upcoming Semester"
+            } else {
+                subtitle = courses.firstOrNull { it.term.isNotEmpty() && !it.term.equals("To be Taken", true) }?.term ?: "Completed"
+            }
+            
+            semesters.add(
+                RoadmapSemester(
+                    title = titleText,
+                    subtitle = subtitle,
+                    status = semesterStatus,
+                    courses = courses
+                )
+            )
+        }
+        
+        return RoadmapData(
+            studentName = studentName,
+            programName = programName,
+            careerYear = calendarYear,
+            completedCreditHours = calculatedCompletedCredits, // The dynamically calculated one
+            totalCreditHours = totalCreditHour, // Pass this to the UI to calculate progress out of
+            careerLevel = careerLevel,
+            semesters = semesters
+        )
+        
+    } catch (e: Exception) {
+        e.printStackTrace()
+        return null
     }
 }
 

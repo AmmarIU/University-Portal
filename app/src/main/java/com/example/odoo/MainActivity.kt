@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ExitToApp
+import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.DateRange
@@ -250,6 +251,17 @@ fun MainAppScreen(
                     },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
+                
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.AutoMirrored.Outlined.List, contentDescription = "Roadmap") },
+                    label = { Text("Roadmap") },
+                    selected = navController.currentDestination?.route == "roadmap",
+                    onClick = {
+                        navController.navigate("roadmap") { popUpTo("home") }
+                        scope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
             }
         }
     ) {
@@ -279,6 +291,7 @@ fun MainAppScreen(
                             val subtitle = when (currentRoute) {
                                 "schedule" -> "Class Schedule"
                                 "attendance" -> "Attendance"
+                                "roadmap" -> "Roadmap"
                                 else -> "Dashboard"
                             }
                             
@@ -321,6 +334,9 @@ fun MainAppScreen(
                 }
                 composable("schedule") {
                     ScheduleScreen(baseUrl, viewModel, isDarkTheme)
+                }
+                composable("roadmap") {
+                    RoadmapScreen(baseUrl, viewModel, isDarkTheme)
                 }
             }
         }

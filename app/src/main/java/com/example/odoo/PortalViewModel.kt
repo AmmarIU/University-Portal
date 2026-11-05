@@ -31,6 +31,14 @@ sealed class AttendanceUiState {
     data class Error(val message: String) : AttendanceUiState()
 }
 
+sealed class RoadmapUiState {
+    object Idle : RoadmapUiState()
+    object Loading : RoadmapUiState()
+    data class Refreshing(val cachedData: RoadmapData) : RoadmapUiState()
+    data class Success(val roadmapData: RoadmapData) : RoadmapUiState()
+    data class Error(val message: String) : RoadmapUiState()
+}
+
 class PortalViewModel(
     private val repository: PortalRepository,
     private val sharedPreferences: SharedPreferences
@@ -41,6 +49,9 @@ class PortalViewModel(
 
     private val _attendanceState = MutableStateFlow<AttendanceUiState>(AttendanceUiState.Idle)
     val attendanceState: StateFlow<AttendanceUiState> = _attendanceState.asStateFlow()
+
+    private val _roadmapState = MutableStateFlow<RoadmapUiState>(RoadmapUiState.Idle)
+    val roadmapState: StateFlow<RoadmapUiState> = _roadmapState.asStateFlow()
 
     private val _sessionId = MutableStateFlow<String?>(null)
     val sessionId: StateFlow<String?> = _sessionId.asStateFlow()
@@ -150,6 +161,45 @@ class PortalViewModel(
                 _attendanceState.value = AttendanceUiState.Success(items)
             } else {
                 _attendanceState.value = AttendanceUiState.Error(result.exceptionOrNull()?.message ?: "Unknown error")
+            }
+        }
+    }
+    
+    fun fetchRoadmap(baseUrl: String, forceRefresh: Boolean = false) {
+        val lastFetch = sharedPreferences.getLong("last_roadmap_fetch", 0L)
+        val currentTime = System.currentTimeMillis()
+        
+        if (forceRefresh) {
+            if (currentTime - lastFetch < 5 * 60 * 1000L) {
+                val remainingSecs = (5 * 60 * 1000L - (currentTime - lastFetch)) / 1000
+                viewModelScope.launch { _toastMessage.emit("Please wait ${remainingSecs / 60}m ${remainingSecs % 60}s before refreshing.") }
+                return
+            }
+            val currentData = (_roadmapState.value as? RoadmapUiState.Success)?.roadmapData 
+                ?: (_roadmapState.value as? RoadmapUiState.Refreshing)?.cachedData
+            if (currentData != null) {
+                _roadmapState.value = RoadmapUiState.Refreshing(currentData)
+            }
+        } else if (_roadmapState.value is RoadmapUiState.Success) {
+            return
+        }
+        
+        viewModelScope.launch {
+            if (_roadmapState.value !is RoadmapUiState.Refreshing) {
+                _roadmapState.value = RoadmapUiState.Loading
+            }
+            val result = repository.fetchRoadmap(baseUrl)
+            if (result.isSuccess) {
+                val data = result.getOrNull()
+                if (data != null) {
+                    sharedPreferences.edit(commit = true) { 
+                        putString("roadmap_cache", gson.toJson(data)) 
+                        putLong("last_roadmap_fetch", System.currentTimeMillis())
+                    }
+                    _roadmapState.value = RoadmapUiState.Success(data)
+                }
+            } else if (_roadmapState.value !is RoadmapUiState.Success) {
+                _roadmapState.value = RoadmapUiState.Error(result.exceptionOrNull()?.message ?: "Unknown error")
             }
         }
     }

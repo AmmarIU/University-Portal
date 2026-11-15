@@ -56,6 +56,9 @@ class PortalViewModel(
     private val _sessionId = MutableStateFlow<String?>(null)
     val sessionId: StateFlow<String?> = _sessionId.asStateFlow()
     
+    private val _isVerifyingBeta = MutableStateFlow(false)
+    val isVerifyingBeta: StateFlow<Boolean> = _isVerifyingBeta.asStateFlow()
+    
     private val _toastMessage = MutableSharedFlow<String>()
     val toastMessage: SharedFlow<String> = _toastMessage.asSharedFlow()
     
@@ -88,12 +91,41 @@ class PortalViewModel(
     }
 
     fun setSessionId(id: String?) {
-        _sessionId.value = id
         if (id == null) {
+            _sessionId.value = null
             _uiState.value = PortalUiState.Idle
             _attendanceState.value = AttendanceUiState.Idle
-            // Optionally clear cache on logout:
-            // sharedPreferences.edit().clear().apply()
+            // We do not clear cache here so the user has offline access if they log back in
+            return
+        }
+        
+        // If an ID is provided, verify beta access first
+        _isVerifyingBeta.value = true
+        
+        viewModelScope.launch {
+            val allowedIds = listOf("IU02-0323-0455") // Add your beta testers here!
+            
+            // We need to set the session ID temporarily so the network client can use it
+            _sessionId.value = id 
+            
+            val result = repository.verifyBetaAccess("https://app.iqra.edu.pk", allowedIds)
+            
+            _isVerifyingBeta.value = false
+            
+            if (result.isSuccess && result.getOrNull() == true) {
+                // Access granted, session ID is already set, let them in!
+            } else {
+                // Access denied or error parsing ID
+                _sessionId.value = null // Revoke access
+                
+                val reason = if (result.isFailure) {
+                    "Beta Verification Failed. Ensure you are completely logged in."
+                } else {
+                    "Your account is not authorized for this closed beta."
+                }
+                
+                _toastMessage.emit(reason)
+            }
         }
     }
 

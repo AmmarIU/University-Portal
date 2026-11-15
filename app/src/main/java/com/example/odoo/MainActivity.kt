@@ -140,8 +140,26 @@ fun RootScreen(
     onThemeToggle: () -> Unit
 ) {
     val sessionId by viewModel.sessionId.collectAsState()
+    val isVerifyingBeta by viewModel.isVerifyingBeta.collectAsState()
 
-    if (sessionId == null) {
+    if (isVerifyingBeta) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(if (isDarkTheme) MaterialTheme.colorScheme.background else BackgroundGray),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = IqraBlue)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Verifying Beta Access...",
+                    color = if (isDarkTheme) Color.White else IqraNavy,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+    } else if (sessionId == null) {
         LoginScreen(baseUrl, viewModel)
     } else {
         MainAppScreen(baseUrl, viewModel, isDarkTheme, onThemeToggle)

@@ -63,6 +63,53 @@ data class RoadmapCourse(
 
 class PortalRepository(private val client: OkHttpClient) {
 
+    suspend fun verifyBetaAccess(baseUrl: String, allowedIds: List<String>): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$baseUrl/student/dashboard")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(Exception("HTTP Error: ${response.code}"))
+                }
+
+                val html = response.body?.string() ?: ""
+                val document = Jsoup.parse(html)
+                
+                // Extract the student ID from the dashboard
+                // From the screenshot, it's inside a span with class "sub-heading"
+                val subHeadings = document.select("span.sub-heading")
+                var studentId: String? = null
+                
+                for (span in subHeadings) {
+                    val text = span.text().trim()
+                    if (text.startsWith("IU02-") || text.matches(Regex("IU\\d{2}-\\d{4}-\\d{4}"))) {
+                        studentId = text
+                        break
+                    }
+                }
+                
+                if (studentId == null) {
+                    // Fallback: try to find it anywhere in the heading block just in case
+                    val headingBlock = document.selectFirst(".user_heading_content")?.text() ?: ""
+                    val match = Regex("IU\\d{2}-\\d{4}-\\d{4}").find(headingBlock)
+                    studentId = match?.value
+                }
+                
+                if (studentId != null) {
+                    val isAllowed = allowedIds.contains(studentId)
+                    Result.success(isAllowed)
+                } else {
+                    Result.failure(Exception("Could not find Student ID on the dashboard to verify access."))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun fetchTimetable(baseUrl: String): Result<List<ScheduleItem>> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()

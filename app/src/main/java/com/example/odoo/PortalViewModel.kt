@@ -103,7 +103,7 @@ class PortalViewModel(
         _isVerifyingBeta.value = true
         
         viewModelScope.launch {
-            val allowedIds = listOf("IU02-0323-0455") // Add your beta testers here!
+            val allowedIds = listOf("IU02-0323-0351","IU02-0323-0744","IU02-0323-0455") // Add your beta testers here!
             
             // We need to set the session ID temporarily so the network client can use it
             _sessionId.value = id 
